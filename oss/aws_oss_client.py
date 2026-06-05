@@ -24,6 +24,12 @@ SIGNS = {
     "coros-s3": "S3SIGN_COROS_S3",   # TODO: confirm with Task 7 smoke test
     "eu-coros": "877571111A1EE5316E4B590103D4B5B3",
 }
+# AWS region per bucket. boto3 must be told the right region or the upload
+# will fail / get cross-region routed.
+BUCKET_TO_REGION = {
+    "coros-s3": "us-west-2",
+    "eu-coros": "eu-central-1",
+}
 SALT = "9y78gpoERW4lBNYL"
 
 
@@ -37,6 +43,8 @@ def fetch_sts(bucket: str, service: str = "aws") -> dict:
     Returns dict with: AccessKeyId, AccessKeySecret, SecurityToken.
     """
     import requests
+    if bucket not in SIGNS:
+        raise ValueError("No COROS STS sign configured for bucket %r" % bucket)
     sign = SIGNS[bucket]
     url = '%s?bucket=%s&service=%s&app_id=%s&sign=%s&v=2' % (
         STS_BASE, bucket, service, APP_ID, sign)
@@ -49,13 +57,18 @@ def fetch_sts(bucket: str, service: str = "aws") -> dict:
     return creds
 
 
-def upload(fit_bytes: bytes, key: str, bucket: str = "coros-s3", region: str = "us-west-2") -> str:
+def upload(fit_bytes: bytes, key: str, bucket: str = "eu-coros", region: str = None) -> str:
     """Multipart upload fit_bytes to AWS S3. Returns the OSS object key.
 
-    bucket: 'coros-s3' (regionId=1) or 'eu-coros' (regionId=3)
-    region: AWS region string for the chosen bucket
+    bucket: 'coros-s3' (regionId=1) or 'eu-coros' (regionId=3). Defaults to
+        'eu-coros' because 'coros-s3' still has a placeholder STS sign
+        (S3SIGN_COROS_S3) and would fail until Task 7 confirms it.
+    region: AWS region for the bucket. If None, inferred via BUCKET_TO_REGION
+        ('us-west-2' for coros-s3, 'eu-central-1' for eu-coros).
     key: full OSS key (e.g. 'fit_zip/activity_xxx.fit')
     """
+    if region is None:
+        region = BUCKET_TO_REGION.get(bucket, "us-west-2")
     creds = fetch_sts(bucket)
     client = boto3.client(
         's3',
