@@ -1063,7 +1063,7 @@ def download_avatarLarge(player_id):
 @app.route("/delete/<filename>", methods=["GET"])
 @login_required
 def delete(filename):
-    credentials = ['garmin_credentials.bin', 'zwift_credentials.bin', 'intervals_credentials.bin']
+    credentials = ['garmin_credentials.bin', 'zwift_credentials.bin', 'intervals_credentials.bin', 'coros_credentials.bin']
     strava = ['strava_api.bin', 'strava_token.txt']
     if filename not in ['profile.bin', 'achievements.bin'] + credentials + strava:
         return '', 403
