@@ -2420,6 +2420,7 @@ def activity_uploads(player_id, activity):
     runalyze_upload(player_id, activity)
     intervals_upload(player_id, activity)
     zwift_upload(player_id, activity)
+    coros_upload(player_id, activity)
 
 @app.route('/api/profiles/<int:player_id>/activities/<int:activity_id>', methods=['PUT', 'DELETE'])
 @jwt_to_session_cookie
