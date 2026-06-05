@@ -2285,12 +2285,19 @@ def coros_upload(player_id, activity):
     creds_file = '%s/coros_credentials' % profile_dir
     if os.path.exists(creds_file + '.bin'):
         creds_file += '.bin'
+        email, password = decrypt_credentials(creds_file)
     elif os.path.exists(creds_file + '.txt'):
         creds_file += '.txt'
+        try:
+            with open(creds_file) as f:
+                email = f.readline().rstrip('\r\n')
+                password = f.readline().rstrip('\r\n')
+        except Exception as exc:
+            logger.warning("Failed to read %s. Skipping COROS upload attempt: %s" % (creds_file, repr(exc)))
+            return
     else:
         logger.info("coros_credentials missing, skip COROS activity update")
         return
-    email, password = decrypt_credentials(creds_file)
     try:
         import hashlib
         password_md5 = hashlib.md5(password.encode()).hexdigest()
