@@ -903,6 +903,20 @@ def garmin(username):
     return render_template("garmin.html", username=current_user.username, uname=cred[0], passw=cred[1])
 
 
+@app.route("/coros/<username>/", methods=["GET", "POST"])
+@login_required
+def coros(username):
+    file = '%s/%s/coros_credentials.bin' % (STORAGE_DIR, current_user.player_id)
+    if request.method == "POST":
+        if request.form['username'] == "" or request.form['password'] == "":
+            flash("COROS credentials can't be empty.")
+            return render_template("coros.html", username=current_user.username)
+        encrypt_credentials(file, (request.form['username'], request.form['password']))
+        return redirect(url_for('settings', username=current_user.username))
+    cred = decrypt_credentials(file)
+    return render_template("coros.html", username=current_user.username, uname=cred[0], passw=cred[1])
+
+
 @app.route("/intervals/<username>/", methods=["GET", "POST"])
 @login_required
 def intervals(username):
@@ -2259,6 +2273,33 @@ def garmin_upload(player_id, activity):
         garth.client.post("connectapi", "/upload-service/upload", api=True, files={"file": (activity.fit_filename, BytesIO(activity.fit))})
     except Exception as exc:
         logger.warning("Garmin upload failed. No internet? %s" % repr(exc))
+
+
+def coros_upload(player_id, activity):
+    try:
+        import coros_client
+    except ImportError as exc:
+        logger.warning("COROS client libs not installed. Skipping COROS upload: %s" % repr(exc))
+        return
+    profile_dir = '%s/%s' % (STORAGE_DIR, player_id)
+    creds_file = '%s/coros_credentials' % profile_dir
+    if os.path.exists(creds_file + '.bin'):
+        creds_file += '.bin'
+    elif os.path.exists(creds_file + '.txt'):
+        creds_file += '.txt'
+    else:
+        logger.info("coros_credentials missing, skip COROS activity update")
+        return
+    email, password = decrypt_credentials(creds_file)
+    try:
+        import hashlib
+        password_md5 = hashlib.md5(password.encode()).hexdigest()
+        fit_md5 = hashlib.md5(activity.fit).hexdigest()
+        client = coros_client.CorosClient()
+        client.login(email, password_md5)
+        client.upload_activity(activity.fit, activity.fit_filename, fit_md5)
+    except Exception as exc:
+        logger.warning("COROS upload failed. No internet? %s" % repr(exc))
 
 def runalyze_upload(player_id, activity):
     runalyze_token = '%s/%s/runalyze_token.txt' % (STORAGE_DIR, player_id)
