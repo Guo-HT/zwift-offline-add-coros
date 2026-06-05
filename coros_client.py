@@ -5,7 +5,7 @@ Mirrors the patterns in /Users/mac/Code/pyCode/garmin-sync-coros/scripts/coros/
 
     client = CorosClient()
     client.login(email, password_md5)         # MD5-hashed password
-    client.upload_activity(fit_bytes, name, fit_md5)
+    client.upload_activity(fit_bytes, fit_filename, fit_md5)
 
 All HTTP calls timeout=30s. Internal exceptions are converted to logger.warning
 + return None; callers should not need to catch.
@@ -95,7 +95,11 @@ class CorosClient:
         try:
             unique = uuid.uuid4().hex
             oss_key = 'fit_zip/%s_%s' % (unique, fit_filename)
-            self._cfg["oss"].upload(fit_bytes, oss_key)
+            oss_module = self._cfg["oss"]
+            if oss_module is aws_oss_client:
+                oss_module.upload(fit_bytes, oss_key, bucket=self._cfg["bucket"])
+            else:
+                oss_module.upload(fit_bytes, oss_key)
             self._call_import_api(oss_key, fit_md5, fit_filename, len(fit_bytes))
         except Exception as exc:
             logger.warning("COROS upload failed. No internet? %s" % repr(exc))
