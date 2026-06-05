@@ -32,7 +32,7 @@ LOGIN_URL = "https://teamcnapi.coros.com/account/login"
 REGION_CONFIG = {
     1: {"teamapi": "https://teamapi.coros.com",   "bucket": "coros-s3", "service": "aws",    "oss": aws_oss_client},
     2: {"teamapi": "https://teamcnapi.coros.com", "bucket": "coros-oss", "service": "aliyun", "oss": ali_oss_client},
-    3: {"teamapi": "https://teamapi.coros.com",   "bucket": "eu-coros",  "service": "aws",    "oss": aws_oss_client},
+    3: {"teamapi": "https://teameuapi.coros.com", "bucket": "eu-coros",  "service": "aws",    "oss": aws_oss_client},
 }
 
 
