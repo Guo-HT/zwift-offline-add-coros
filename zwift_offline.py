@@ -1065,19 +1065,32 @@ def download_avatarLarge(player_id):
     else:
         return '', 404
 
+# Whitelist of filenames the /delete/<name> route is allowed to remove. Kept
+# as a module-level constant so the writer side (coros/garmin/zwift/intervals
+# settings pages) and the delete side can never drift. Adding a new
+# integration? Add the filename here AND in the corresponding upload function.
+_DELETABLE_PROFILE_FILES = ['profile.bin', 'achievements.bin']
+_DELETABLE_CREDENTIALS = [
+    'garmin_credentials.bin',
+    'zwift_credentials.bin',
+    'intervals_credentials.bin',
+    'coros_credentials.bin',
+]
+_DELETABLE_STRAVA = ['strava_api.bin', 'strava_token.txt']
+DELETABLE_FILENAMES = set(_DELETABLE_PROFILE_FILES + _DELETABLE_CREDENTIALS + _DELETABLE_STRAVA)
+
+
 @app.route("/delete/<filename>", methods=["GET"])
 @login_required
 def delete(filename):
-    credentials = ['garmin_credentials.bin', 'zwift_credentials.bin', 'intervals_credentials.bin', 'coros_credentials.bin']
-    strava = ['strava_api.bin', 'strava_token.txt']
-    if filename not in ['profile.bin', 'achievements.bin'] + credentials + strava:
+    if filename not in DELETABLE_FILENAMES:
         return '', 403
     delete_file = os.path.join(STORAGE_DIR, str(current_user.player_id), filename)
     if os.path.isfile(delete_file):
         os.remove("%s" % delete_file)
-    if filename in strava:
+    if filename in _DELETABLE_STRAVA:
         return redirect(url_for('strava', username=current_user.username))
-    if filename in credentials:
+    if filename in _DELETABLE_CREDENTIALS:
         flash("Credentials removed.")
     return redirect(url_for('settings', username=current_user.username))
 

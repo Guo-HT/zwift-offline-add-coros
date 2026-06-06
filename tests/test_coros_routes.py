@@ -140,7 +140,10 @@ def test_delete_unknown_file_returns_403(logged_in_client):
 
 def test_coros_credentials_in_delete_whitelist(fresh_zwift_offline):
     """Static check: the delete whitelist must include coros_credentials.bin,
-    otherwise the Remove button would 403."""
-    import inspect
-    src = inspect.getsource(fresh_zwift_offline.delete)
-    assert "'coros_credentials.bin'" in src
+    otherwise the Remove button would 403. The whitelist now lives as a
+    module-level constant (DELETABLE_FILENAMES) rather than inside the
+    delete() function, so we check the module attribute instead of the
+    function source."""
+    import zwift_offline as zo
+    assert hasattr(zo, 'DELETABLE_FILENAMES'), "module must expose DELETABLE_FILENAMES"
+    assert 'coros_credentials.bin' in zo.DELETABLE_FILENAMES
