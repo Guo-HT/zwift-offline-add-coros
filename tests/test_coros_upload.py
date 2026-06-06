@@ -153,6 +153,45 @@ def test_coros_client_module_import_error_swallowed(fresh_zwift_offline, test_st
             sys.modules['coros_client'] = saved
 
 
+def test_coros_client_module_import_error_warning_includes_expected_path(
+    fresh_zwift_offline, test_storage_dir, monkeypatch, caplog
+):
+    """When `import coros_client` fails, the WARNING must include the
+    expected on-disk path of coros_client.py so the user can see
+    "the file is missing" instead of a vague "ModuleNotFoundError".
+
+    This guards against a regression to the old vague message that
+    pointed users at "pip install" when the real fix was "the file
+    isn't shipped" (cf. commit 7c8640b adding coros_client.py)."""
+    zo = fresh_zwift_offline
+    player_id = 12345
+    profile_dir = os.path.join(test_storage_dir, str(player_id))
+    os.makedirs(profile_dir, exist_ok=True)
+    _write_bin_creds(zo, profile_dir)
+    activity = _make_activity()
+
+    import sys
+    saved = sys.modules.get('coros_client')
+    sys.modules['coros_client'] = None  # force ImportError
+    try:
+        import logging
+        with caplog.at_level(logging.WARNING, logger='zoffline'):
+            zo.coros_upload(player_id, activity)
+    finally:
+        del sys.modules['coros_client']
+        if saved is not None:
+            sys.modules['coros_client'] = saved
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "expected at least one WARNING"
+    msg = warnings[0].getMessage()
+    assert 'coros_client' in msg
+    # The expected on-disk path must be mentioned so the user knows where to look.
+    assert 'coros_client.py' in msg
+    # And it must reference the actual project location, not a generic pip hint.
+    assert '/zwift-offline' in msg or os.sep + 'coros_client.py' in msg
+
+
 # --- .bin preferred over .txt (defensive) -------------------------------------
 
 def test_bin_takes_precedence_over_txt(fresh_zwift_offline, test_storage_dir):

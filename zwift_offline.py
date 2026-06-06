@@ -2279,7 +2279,17 @@ def coros_upload(player_id, activity):
     try:
         import coros_client
     except ImportError as exc:
-        logger.warning("COROS client libs not installed. Skipping COROS upload: %s" % repr(exc))
+        # `coros_client` is a LOCAL module shipped in the project root (it was
+        # added in commit 7c8640b "Add CorosClient"). An ImportError here means
+        # either the file is missing on disk or pyinstaller bundled standalone.exe
+        # without adding it to `hiddenimports` (see standalone.spec). Print the
+        # expected location so the user can fix the install, not just blame
+        # "missing pip package".
+        expected = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'coros_client.py')
+        logger.warning(
+            "COROS client module not importable (expected at %s). "
+            "Skipping COROS upload: %s" % (expected, repr(exc))
+        )
         return
     profile_dir = '%s/%s' % (STORAGE_DIR, player_id)
     creds_file = '%s/coros_credentials' % profile_dir
