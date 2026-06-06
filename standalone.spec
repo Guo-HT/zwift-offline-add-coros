@@ -6,7 +6,21 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    # COROS upload path does `import coros_client` at runtime (inside
+    # coros_upload() in zwift_offline.py), so PyInstaller's static analysis
+    # misses it. Add the module and everything it (transitively) needs so
+    # standalone.exe doesn't fail with "No module named 'coros_client'".
+    hiddenimports=[
+        'coros_client',
+        'oss',
+        'oss.ali_oss_client',
+        'oss.aws_oss_client',
+        'oss2',
+        'oss2.models',
+        'boto3',
+        'boto3.s3',
+        'boto3.s3.transfer',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
