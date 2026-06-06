@@ -2539,8 +2539,12 @@ def api_profiles_activities_id(player_id, activity_id):
     # For using with upload_activity
     with open('%s/%s/last_activity.bin' % (STORAGE_DIR, player_id), 'wb') as f:
         f.write(stream)
-    # Upload in separate thread to avoid client freezing if it takes longer than expected
-    upload = threading.Thread(target=activity_uploads, args=(player_id, activity))
+    # Upload in separate thread to avoid client freezing if it takes longer than expected.
+    # daemon=True so a stuck upload (e.g. hung Zwift/Strava server) can't keep
+    # the process alive at shutdown — without it, threading.Thread defaults to
+    # non-daemon and the main process will block on .join() during interpreter
+    # teardown, which is the exact failure mode that masks the real cause.
+    upload = threading.Thread(target=activity_uploads, args=(player_id, activity), daemon=True)
     upload.start()
     logout_player(player_id)
     return response, 200
