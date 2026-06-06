@@ -127,7 +127,11 @@ if MULTIPLAYER:
 
 CREDENTIALS_KEY_FILE = "%s/credentials-key.bin" % STORAGE_DIR
 if not os.path.exists(CREDENTIALS_KEY_FILE):
+    # 0o600 — the AES key that decrypts all *_credentials.bin files. Without
+    # this, on a shared host any local user can read the key and decrypt the
+    # Garmin / Zwift / Intervals / COROS / Strava credential blobs.
     with open(CREDENTIALS_KEY_FILE, 'wb') as f:
+        os.chmod(CREDENTIALS_KEY_FILE, 0o600)
         f.write(get_random_bytes(32))
 with open(CREDENTIALS_KEY_FILE, 'rb') as f:
     credentials_key = f.read()
@@ -144,6 +148,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///{db}'.format(db=DATABASE_PATH
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 if not os.path.exists(SECRET_KEY_FILE):
     with open(SECRET_KEY_FILE, 'wb') as f:
+        os.chmod(SECRET_KEY_FILE, 0o600)
         f.write(os.urandom(16))
 with open(SECRET_KEY_FILE, 'rb') as f:
     app.config['SECRET_KEY'] = f.read()
@@ -2310,8 +2315,11 @@ def coros_upload(player_id, activity):
         return
     try:
         import hashlib
-        password_md5 = hashlib.md5(password.encode()).hexdigest()
-        fit_md5 = hashlib.md5(activity.fit).hexdigest()
+        # COROS protocol requires raw MD5 of the password (no PBKDF2 etc.);
+        # `usedforsecurity=False` opts out of FIPS' MD5 refusal — both digests
+        # are wire-format only, not security primitives on our side.
+        password_md5 = hashlib.md5(password.encode(), usedforsecurity=False).hexdigest()
+        fit_md5 = hashlib.md5(activity.fit, usedforsecurity=False).hexdigest()
         client = coros_client.CorosClient()
         client.login(email, password_md5)
         client.upload_activity(activity.fit, activity.fit_filename, fit_md5)
