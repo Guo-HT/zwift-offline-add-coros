@@ -2227,8 +2227,8 @@ def strava_upload(player_id, activity):
         # See if there's internet to upload to Strava
         strava.upload_activity(BytesIO(activity.fit), data_type='fit', name=activity.name)
         # XXX: assume the upload succeeds on strava's end. not checking on it.
-    except Exception as exc:
-        logger.warning("Strava upload failed. No internet? %s" % repr(exc))
+    except Exception:
+        logger.exception("Strava upload failed. No internet?")
 
 
 def garmin_upload(player_id, activity):
@@ -2267,17 +2267,19 @@ def garmin_upload(player_id, activity):
     try:
         garth.resume(tokens_dir)
         garth.client.username
-    except:
+    except Exception:
+        # `except Exception` (not bare `except:`) — a bare except would
+        # also catch SystemExit / KeyboardInterrupt.
         try:
             garth.login(username, password)
             garth.save(tokens_dir)
-        except Exception as exc:
-            logger.warning("Garmin login failed: %s" % repr(exc))
+        except Exception:
+            logger.exception("Garmin login failed")
             return
     try:
         garth.client.post("connectapi", "/upload-service/upload", api=True, files={"file": (activity.fit_filename, BytesIO(activity.fit))})
-    except Exception as exc:
-        logger.warning("Garmin upload failed. No internet? %s" % repr(exc))
+    except Exception:
+        logger.exception("Garmin upload failed. No internet?")
 
 
 def coros_upload(player_id, activity):
@@ -2345,10 +2347,14 @@ def runalyze_upload(player_id, activity):
         return
     try:
         r = requests.post("https://runalyze.com/api/v1/activities/uploads",
-                          files={'file': BytesIO(activity.fit)}, headers={"token": runtoken})
-        logger.info(r.text)
-    except Exception as exc:
-        logger.warning("Runalyze upload failed. No internet? %s" % repr(exc))
+                          files={'file': BytesIO(activity.fit)}, headers={"token": runtoken},
+                          timeout=30)
+        r.raise_for_status()
+        # Truncate the response body in logs — Runalyze sometimes returns
+        # multi-KB HTML error pages that just spam zoffline.log.
+        logger.info("Runalyze upload response (truncated to 200 chars): %s" % (r.text[:200],))
+    except Exception:
+        logger.exception("Runalyze upload failed. No internet?")
 
 
 def intervals_upload(player_id, activity):
@@ -2359,10 +2365,21 @@ def intervals_upload(player_id, activity):
     athlete_id, api_key = decrypt_credentials(intervals_credentials)
     try:
         from requests.auth import HTTPBasicAuth
-        url = 'http://intervals.icu/api/v1/athlete/%s/activities?name=%s' % (athlete_id, activity.name)
-        requests.post(url, files = {"file": BytesIO(activity.fit)}, auth = HTTPBasicAuth('API_KEY', api_key))
-    except Exception as exc:
-        logger.warning("Intervals.icu upload failed. No internet? %s" % repr(exc))
+        from urllib.parse import urlencode
+        # Use the requests params= kwarg rather than string-interpolating
+        # activity.name into the URL: a name containing '&' or '?' would
+        # otherwise inject extra query params. Also pin to https.
+        url = 'https://intervals.icu/api/v1/athlete/%s/activities' % athlete_id
+        r = requests.post(
+            url,
+            files={"file": BytesIO(activity.fit)},
+            auth=HTTPBasicAuth('API_KEY', api_key),
+            params={'name': activity.name or ''},
+            timeout=30,
+        )
+        r.raise_for_status()
+    except Exception:
+        logger.exception("Intervals.icu upload failed. No internet?")
 
 
 def zwift_upload(player_id, activity):
@@ -2372,7 +2389,10 @@ def zwift_upload(player_id, activity):
         return
     username, password = decrypt_credentials(zwift_credentials)
     try:
-        session = requests.session()
+        # Mount a default 30s timeout on every request the session makes.
+        # online_sync.py has no internal timeouts, so without this a single
+        # hanging Zwift server would tie up the activity_uploads thread.
+        session = _SessionWithTimeout(requests.session(), 30)
         access_token, refresh_token = online_sync.login(session, username, password)
         activity.player_id = online_sync.get_player_id(session, access_token)
         new_activity = activity_pb2.Activity()
@@ -2382,8 +2402,32 @@ def zwift_upload(player_id, activity):
         activity.id = online_sync.create_activity(session, access_token, new_activity)
         online_sync.upload_activity(session, access_token, activity)
         online_sync.logout(session, refresh_token)
-    except Exception as exc:
-        logger.warning("Zwift upload failed. No internet? %s" % repr(exc))
+    except Exception:
+        logger.exception("Zwift upload failed. No internet?")
+
+
+class _SessionWithTimeout:
+    """Wrap a requests.Session so every request gets a default timeout.
+
+    online_sync.py doesn't set timeouts on its own, so a hung Zwift server
+    would tie up the activity_uploads thread forever. Explicit per-call
+    timeouts in online_sync would be cleaner, but this wrapper keeps the
+    change local and lets existing online_sync code keep working.
+
+    If a caller already passed timeout=... we keep it (don't override).
+    """
+    def __init__(self, session, default_timeout):
+        # Use object.__setattr__ to avoid recursion into our own __getattr__.
+        object.__setattr__(self, '_session', session)
+        object.__setattr__(self, '_default_timeout', default_timeout)
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+    def request(self, method, url, **kwargs):
+        if 'timeout' not in kwargs:
+            kwargs['timeout'] = self._default_timeout
+        return self._session.request(method, url, **kwargs)
 
 
 def moving_average(iterable, n):
