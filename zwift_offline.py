@@ -2319,12 +2319,18 @@ def coros_upload(player_id, activity):
         # `usedforsecurity=False` opts out of FIPS' MD5 refusal — both digests
         # are wire-format only, not security primitives on our side.
         password_md5 = hashlib.md5(password.encode(), usedforsecurity=False).hexdigest()
+        # Don't keep the plaintext password around any longer than needed —
+        # it would otherwise be visible in any future exception traceback.
+        password = None
         fit_md5 = hashlib.md5(activity.fit, usedforsecurity=False).hexdigest()
         client = coros_client.CorosClient()
         client.login(email, password_md5)
         client.upload_activity(activity.fit, activity.fit_filename, fit_md5)
-    except Exception as exc:
-        logger.warning("COROS upload failed. No internet? %s" % repr(exc))
+    except Exception:
+        # Use logger.exception (not logger.warning) so the traceback is
+        # preserved — the user needs to be able to tell "no internet" from
+        # "OSS sign rotated" from "import API rejected the file".
+        logger.exception("COROS upload failed. No internet?")
 
 def runalyze_upload(player_id, activity):
     runalyze_token = '%s/%s/runalyze_token.txt' % (STORAGE_DIR, player_id)

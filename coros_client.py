@@ -90,23 +90,41 @@ class CorosClient:
         """3-step: upload FIT to OSS (STS handled inside oss client) → call COROS import API.
 
         fit_bytes: raw FIT file content
-        fit_filename: display name (e.g. 'activity_2026-06-05_120000.fit')
+        fit_filename: display name (e.g. 'activity_2026-06-05_120000.fit').
+            Sanitized to [A-Za-z0-9._-] — the OSS key embeds it, and a
+            client-controlled filename with '/' or NULs would let a user
+            inject path segments or truncate the key.
         fit_md5: MD5 hex digest of fit_bytes (used by COROS import API)
         """
         if not self.access_token or not self._cfg:
             logger.warning("COROS upload_activity called without login; skipping")
             return
+        # Sanitize filename: keep only the safe subset. Replace runs of
+        # anything else with '_' and cap at 200 chars (the OSS key is
+        # 'fit_zip/<uuid>_<name>' and we don't want a long name to push
+        # us past any SDK key-length limit).
+        import re
+        safe_name = re.sub(r'[^A-Za-z0-9._-]', '_', fit_filename)[:200]
+        if not safe_name:
+            safe_name = "activity.fit"
         try:
             unique = uuid.uuid4().hex
-            oss_key = 'fit_zip/%s_%s' % (unique, fit_filename)
+            oss_key = 'fit_zip/%s_%s' % (unique, safe_name)
             oss_module = self._cfg["oss"]
             if oss_module is aws_oss_client:
                 oss_module.upload(fit_bytes, oss_key, bucket=self._cfg["bucket"])
             else:
                 oss_module.upload(fit_bytes, oss_key)
-            self._call_import_api(oss_key, fit_md5, fit_filename, len(fit_bytes))
+            self._call_import_api(oss_key, fit_md5, safe_name, len(fit_bytes))
         except Exception as exc:
-            logger.warning("COROS upload failed. No internet? %s" % repr(exc))
+            # logger.exception includes the traceback, which is what the
+            # user needs to tell "no internet" from "OSS sign rotated" from
+            # "import API rejected the file". The old message collapsed all
+            # three into one line.
+            logger.exception("COROS upload failed; if the FIT was already "
+                             "pushed to OSS, the object at key %r is now an "
+                             "orphan (COROS won't import and won't clean up "
+                             "for you): %s" % (oss_key, repr(exc)))
 
     def _call_import_api(self, oss_key: str, fit_md5: str, fit_filename: str, size: int) -> None:
         """POST {teamapi}/activity/fit/import as multipart/form-data with jsonParameter field.
