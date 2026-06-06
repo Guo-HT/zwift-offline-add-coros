@@ -27,7 +27,15 @@ SALT = "9y78gpoERW4lBNYL"  # used to decode the STS credentials blob
 
 
 def _decode_credentials(blob: str) -> dict:
-    """Decode the base64+salt-wrapped credentials string from COROS STS response."""
+    """Decode the COROS STS response blob.
+
+    NOTE: this is obfuscation, not cryptography. The SALT is a fixed public
+    string baked into the reference client and shared across all installs.
+    The COROS server relies on the `sign` query param in `fetch_sts` to
+    authorize the request; the `credentials` blob is base64(salt+JSON), so
+    anyone with the STS response can decode it. Treat the resulting
+    AccessKey as short-lived (STS default = 1h).
+    """
     return json.loads(base64.b64decode(blob.replace(SALT, '')).decode('utf-8'))
 
 

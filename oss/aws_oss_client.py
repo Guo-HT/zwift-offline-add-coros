@@ -20,8 +20,11 @@ STS_BASE = "https://faq.coros.com/openapi/oss/sts"
 APP_ID = "1660188068672619112"
 # Two signs observed in the wild; for regionId=1 the bucket is 'coros-s3',
 # for regionId=3 (Europe) the bucket is 'eu-coros'. We pick per region below.
+# `coros-s3` is still a placeholder (S3SIGN_COROS_S3) — see fetch_sts() for
+# the runtime check that turns it into a clean error instead of a silent
+# COROS upload failure.
 SIGNS = {
-    "coros-s3": "S3SIGN_COROS_S3",   # TODO: confirm with Task 7 smoke test
+    "coros-s3": "S3SIGN_COROS_S3",   # placeholder: see fetch_sts() guard
     "eu-coros": "877571111A1EE5316E4B590103D4B5B3",
 }
 # AWS region per bucket. boto3 must be told the right region or the upload
@@ -34,6 +37,15 @@ SALT = "9y78gpoERW4lBNYL"
 
 
 def _decode_credentials(blob: str) -> dict:
+    """Decode the COROS STS response blob.
+
+    NOTE: this is obfuscation, not cryptography. The SALT is a fixed public
+    string baked into the reference client (`/Users/mac/Code/pyCode/garmin-sync-coros`)
+    and shared across all installs. The COROS server relies on the `sign`
+    query param in `fetch_sts` to authorize the request; the `credentials`
+    blob is base64(salt+JSON), so anyone with the STS response can decode it.
+    Treat the resulting AccessKey as short-lived (STS default = 1h).
+    """
     return json.loads(base64.b64decode(blob.replace(SALT, '')).decode('utf-8'))
 
 
@@ -41,11 +53,27 @@ def fetch_sts(bucket: str, service: str = "aws") -> dict:
     """GET STS endpoint with hardcoded query params.
 
     Returns dict with: AccessKeyId, AccessKeySecret, SecurityToken.
+
+    Raises:
+        ValueError: if `bucket` is unknown OR if its STS sign is still a
+            placeholder (S3SIGN_COROS_S3). The latter is intentionally
+            distinguished so the caller can show "COROS regionId=1 is not
+            yet supported" instead of an opaque "COROS upload failed"
+            warning that the user can't act on.
     """
     import requests
     if bucket not in SIGNS:
         raise ValueError("No COROS STS sign configured for bucket %r" % bucket)
     sign = SIGNS[bucket]
+    if sign.startswith("S3SIGN_COROS_S3"):
+        # Placeholder. Without this guard, the upload would proceed,
+        # COROS would 4xx the STS call, and the user would see only a
+        # vague logger.warning("COROS upload failed"). Fail loud here.
+        raise NotImplementedError(
+            "COROS regionId=1 (bucket %r) is not yet supported: STS sign is "
+            "still the S3SIGN_COROS_S3 placeholder. Until it is filled in, "
+            "regionId=1 uploads will fail. Use regionId=2 or 3." % bucket
+        )
     url = '%s?bucket=%s&service=%s&app_id=%s&sign=%s&v=2' % (
         STS_BASE, bucket, service, APP_ID, sign)
     r = requests.get(url, timeout=30)

@@ -99,21 +99,21 @@ def test_aws_fetch_sts_non_200_code_raises(mock_requests):
         aws_oss_client.fetch_sts('eu-coros')
 
 
-def test_aws_fetch_sts_coros_s3_uses_placeholder_sign(mock_requests, monkeypatch):
-    """The S3SIGN_COROS_S3 TODO is still in the SIGNS table; verify the URL
-    actually uses the placeholder (so we don't silently start sending the
-    eu-coros sign for the wrong bucket)."""
-    captured = {}
-    creds = {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'}
+def test_aws_fetch_sts_coros_s3_placeholder_rejected(mock_requests, monkeypatch):
+    """The S3SIGN_COROS_S3 placeholder for regionId=1 (bucket 'coros-s3') must
+    be rejected BEFORE any HTTP request is sent. Without this guard, the
+    upload would proceed, COROS would 4xx the STS call, and the user would
+    see only a vague logger.warning("COROS upload failed")."""
+    import requests
+    sent = {'count': 0}
 
     def fake_get(url, *args, **kwargs):
-        captured['url'] = url
+        sent['count'] += 1
         m = MagicMock()
-        m.json.return_value = _sts_payload(creds)
+        m.json.return_value = _sts_payload({'AccessKeyId': 'a'})
         m.raise_for_status.return_value = None
         return m
-    import requests
     monkeypatch.setattr(requests, 'get', fake_get)
-    aws_oss_client.fetch_sts('coros-s3')
-    assert 'sign=S3SIGN_COROS_S3' in captured['url']
-    assert 'bucket=coros-s3' in captured['url']
+    with pytest.raises(NotImplementedError, match="regionId=1"):
+        aws_oss_client.fetch_sts('coros-s3')
+    assert sent['count'] == 0, "placeholder bucket must not hit the network"

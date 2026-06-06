@@ -63,12 +63,16 @@ class CorosClient:
                 },
                 timeout=HTTP_TIMEOUT,
             )
+            r.raise_for_status()
             data = r.json()
         except Exception as exc:
             logger.warning("COROS login HTTP failed: %s" % repr(exc))
             return
         if data.get("result") != "0000":
-            logger.warning("COROS login failed: %s" % data.get("message", data))
+            # Field-whitelist: avoid logging arbitrary fields from the response
+            # (some historical COROS responses included user email traces).
+            logger.warning("COROS login failed: result=%s message=%s" % (
+                data.get("result"), data.get("message")))
             return
         d = data["data"]
         self.access_token = d["accessToken"]
@@ -129,7 +133,16 @@ class CorosClient:
             files={"jsonParameter": (None, json.dumps(data))},
             timeout=HTTP_TIMEOUT,
         )
+        r.raise_for_status()
         payload = r.json()
         if payload.get("result") != "0000" or payload.get("data", {}).get("status") != 2:
-            raise RuntimeError("COROS import API failed: %s" % payload)
+            # Field-whitelist: don't dump the full response (which may include
+            # user-specific data fields) — only the protocol-meaningful codes.
+            raise RuntimeError(
+                "COROS import API failed: result=%s status=%s message=%s" % (
+                    payload.get("result"),
+                    payload.get("data", {}).get("status"),
+                    payload.get("message"),
+                )
+            )
         logger.info("COROS activity import ok: %s" % fit_filename)
