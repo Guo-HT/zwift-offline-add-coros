@@ -3,11 +3,16 @@
 HTTP is mocked. We verify:
   - login() populates state correctly for each region
   - login() gracefully handles failure modes
+  - upload_activity() zips the FIT, uploads the ZIP, and builds the
+    correct import-API body (md5/size/oriFileName are the ZIP's, not the
+    FIT's)
   - upload_activity() dispatches to the right OSS module per region
-  - upload_activity() builds the correct import-API body
   - upload_activity() requires login first
 """
 
+import hashlib
+import io
+import zipfile
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -167,15 +172,12 @@ def test_upload_activity_dispatches_to_correct_oss(
 
     captured = {}
     def fake_upload(first_arg, *args, **kwargs):
-        # first_arg = fit_bytes (top-level function call, no implicit self)
-        # args = (oss_key,)  for ali; (oss_key,) for aws too (bucket is kw)
-        # kwargs['bucket'] is set only for aws
-        captured['fit_bytes'] = first_arg
+        # first_arg = zip_bytes (top-level function call, no implicit self)
+        captured['zip_bytes'] = first_arg
         captured['oss_key'] = args[0] if args else None
         if 'bucket' in kwargs:
             captured['aws_bucket'] = kwargs['bucket']
         return 'oss-key'
-    # We need to patch BOTH upload entry points
     with patch.object(aws_oss_client, 'upload', side_effect=fake_upload), \
          patch.object(ali_oss_client, 'upload', side_effect=fake_upload):
         c = CorosClient()
@@ -184,13 +186,20 @@ def test_upload_activity_dispatches_to_correct_oss(
         c.upload_activity(b'fit-bytes', 'ride.fit', 'md5hex')
 
     if expected_module is aws_oss_client:
-        # We pass bucket=<self._cfg["bucket"]> when calling aws
         assert captured.get('aws_bucket') == expected_bucket
-    # Either way, args should carry (fit_bytes, oss_key)
-    assert captured.get('fit_bytes') == b'fit-bytes'
+    # The bytes pushed to OSS must be a ZIP (not the raw FIT) — the old
+    # code pushed b'fit-bytes' directly and COROS returned status=-1.
+    assert captured.get('zip_bytes') != b'fit-bytes'
+    zf = zipfile.ZipFile(io.BytesIO(captured['zip_bytes']))
+    assert zf.read('ride.fit') == b'fit-bytes'
+    # OSS key: fit_zip/<userId>/<zip_md5>.zip
     assert captured.get('oss_key') is not None
-    assert captured['oss_key'].startswith('fit_zip/')
-    assert captured['oss_key'].endswith('_ride.fit')
+    assert captured['oss_key'].startswith('fit_zip/u/')
+    assert captured['oss_key'].endswith('.zip')
+    # The middle segment must be the zip md5 (32 hex chars).
+    middle = captured['oss_key'][len('fit_zip/u/'):-len('.zip')]
+    assert len(middle) == 32 and all(ch in '0123456789abcdef' for ch in middle)
+    assert middle == hashlib.md5(captured['zip_bytes'], usedforsecurity=False).hexdigest()
 
 
 def test_upload_activity_import_api_success(mock_requests):
@@ -282,3 +291,91 @@ def test_call_import_api_header_lowercase():
     assert body['object'] == 'fit_zip/abc_r.fit'
     assert body['source'] == 1
     assert body['timezone'] == 32
+
+
+# --- zip behavior -------------------------------------------------------------
+#
+# Regression tests for the "status=-1 message=OK" bug: COROS rejects a raw
+# FIT and only accepts a single-entry ZIP wrapped via zipfile.ZIP_DEFLATED.
+
+def test_upload_activity_zips_fit_before_upload(mock_requests):
+    """The bytes pushed to OSS must be a ZIP whose single entry contains
+    the FIT, not the raw FIT. Otherwise COROS returns status=-1."""
+    _register_login(mock_requests, region_id=2, user_id='u42')
+    def import_handler(r):
+        r.raise_for_status.return_value = None
+        r.json.return_value = {'result': '0000', 'data': {'status': 2}}
+    mock_requests['queue'].append(import_handler)
+
+    captured = {}
+    def fake_upload(zip_bytes, oss_key):
+        captured['zip_bytes'] = zip_bytes
+        captured['oss_key'] = oss_key
+        return oss_key
+    with patch.object(ali_oss_client, 'upload', side_effect=fake_upload):
+        c = CorosClient()
+        c.login('a@b.com', 'h')
+        c.upload_activity(b'raw-fit-content', 'activity.fit', 'fit-md5-irrelevant')
+
+    # 1. The OSS key must be fit_zip/<userId>/<zip_md5>.zip — the
+    #    reference client's shape, content-addressed.
+    expected_zip_md5 = hashlib.md5(captured['zip_bytes'], usedforsecurity=False).hexdigest()
+    assert captured['oss_key'] == 'fit_zip/u42/%s.zip' % expected_zip_md5
+
+    # 2. The bytes pushed to OSS must be a valid ZIP (PK\\x03\\x04 magic).
+    assert captured['zip_bytes'][:4] == b'PK\x03\x04', "not a ZIP"
+
+    # 3. The ZIP must contain exactly one entry named 'activity.fit' with
+    #    the original FIT bytes.
+    zf = zipfile.ZipFile(io.BytesIO(captured['zip_bytes']))
+    assert zf.namelist() == ['activity.fit']
+    assert zf.read('activity.fit') == b'raw-fit-content'
+
+    # 4. The caller's fit_md5 must NOT appear anywhere — the import API
+    #    uses the ZIP's md5, so the caller-supplied value is discarded.
+    assert b'fit-md5-irrelevant' not in captured['zip_bytes']
+
+
+def test_upload_activity_import_api_body_fields_via_post_capture(mock_requests, monkeypatch):
+    """End-to-end: the bytes sent to /activity/fit/import must contain
+    the ZIP md5 (not the FIT md5), the ZIP size (not the FIT size), and
+    a .zip oriFileName (not .fit)."""
+    import json as _json
+    import requests
+    _register_login(mock_requests, region_id=2, user_id='u42')
+    # Queue the import-API response (status=2 so upload returns cleanly).
+    def import_handler(r):
+        r.raise_for_status.return_value = None
+        r.json.return_value = {'result': '0000', 'data': {'status': 2}}
+    mock_requests['queue'].append(import_handler)
+
+    captured_post = {}
+    real_post = requests.post  # the patched fake_post from the fixture
+    def spy_post(url, *args, **kwargs):
+        r = real_post(url, *args, **kwargs)
+        if '/activity/fit/import' in str(url):
+            captured_post['url'] = url
+            captured_post['files'] = kwargs.get('files', {})
+        return r
+    monkeypatch.setattr(requests, 'post', spy_post)
+
+    captured_oss = {}
+    def fake_upload(zip_bytes, oss_key):
+        captured_oss['zip_bytes'] = zip_bytes
+        captured_oss['oss_key'] = oss_key
+        return oss_key
+    with patch.object(ali_oss_client, 'upload', side_effect=fake_upload):
+        c = CorosClient()
+        c.login('a@b.com', 'h')
+        c.upload_activity(b'fit-bytes', 'ride.fit', 'fit-md5-callers-value')
+
+    zip_bytes = captured_oss['zip_bytes']
+    zip_md5 = hashlib.md5(zip_bytes, usedforsecurity=False).hexdigest()
+    body = _json.loads(captured_post['files']['jsonParameter'][1])
+    assert body['object'] == 'fit_zip/u42/%s.zip' % zip_md5
+    assert body['md5'] == zip_md5
+    assert body['md5'] != 'fit-md5-callers-value'  # NOT the FIT md5
+    assert body['size'] == len(zip_bytes)
+    assert body['size'] != len(b'fit-bytes')       # NOT the FIT size
+    assert body['oriFileName'] == '%s.zip' % zip_md5
+    assert body['oriFileName'] != 'ride.fit'
