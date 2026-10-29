@@ -9,6 +9,11 @@ Mirrors the patterns in /Users/mac/Code/pyCode/garmin-sync-coros/scripts/coros/
 
 All HTTP calls timeout=30s. Internal exceptions are converted to logger.warning
 + return None; callers should not need to catch.
+
+The accessToken returned by login() is also what authenticates the STS step
+that yields the temporary OSS credentials: COROS closed the anonymous STS
+channel on 2026-10-03, so the token has to be handed down to the OSS client
+(see oss/sts.py for the channel list).
 """
 
 import hashlib
@@ -134,10 +139,15 @@ class CorosClient:
         zip_basename = '%s.zip' % zip_md5
         try:
             oss_module = self._cfg["oss"]
+            # The temporary OSS credentials come from COROS's STS endpoint.
+            # Since 2026-10-03 COROS closed the anonymous STS channel, so
+            # the login accessToken has to be handed down to the OSS client
+            # (it authenticates against the training-centre proxy).
             if oss_module is aws_oss_client:
-                oss_module.upload(zip_bytes, oss_key, bucket=self._cfg["bucket"])
+                oss_module.upload(zip_bytes, oss_key, bucket=self._cfg["bucket"],
+                                  access_token=self.access_token)
             else:
-                oss_module.upload(zip_bytes, oss_key)
+                oss_module.upload(zip_bytes, oss_key, access_token=self.access_token)
             self._call_import_api(oss_key, zip_md5, zip_basename, len(zip_bytes))
         except Exception as exc:
             # logger.exception includes the traceback, which is what the

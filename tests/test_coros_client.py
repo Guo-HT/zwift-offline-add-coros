@@ -177,6 +177,7 @@ def test_upload_activity_dispatches_to_correct_oss(
         captured['oss_key'] = args[0] if args else None
         if 'bucket' in kwargs:
             captured['aws_bucket'] = kwargs['bucket']
+        captured['access_token'] = kwargs.get('access_token')
         return 'oss-key'
     with patch.object(aws_oss_client, 'upload', side_effect=fake_upload), \
          patch.object(ali_oss_client, 'upload', side_effect=fake_upload):
@@ -187,6 +188,10 @@ def test_upload_activity_dispatches_to_correct_oss(
 
     if expected_module is aws_oss_client:
         assert captured.get('aws_bucket') == expected_bucket
+    # Since 2026-10-03 COROS closed the anonymous STS channel: the login
+    # token has to be handed down to the OSS client, otherwise the STS
+    # request cannot be authenticated.
+    assert captured.get('access_token') == 'tok'
     # The bytes pushed to OSS must be a ZIP (not the raw FIT) — the old
     # code pushed b'fit-bytes' directly and COROS returned status=-1.
     assert captured.get('zip_bytes') != b'fit-bytes'
@@ -308,7 +313,7 @@ def test_upload_activity_zips_fit_before_upload(mock_requests):
     mock_requests['queue'].append(import_handler)
 
     captured = {}
-    def fake_upload(zip_bytes, oss_key):
+    def fake_upload(zip_bytes, oss_key, **kwargs):
         captured['zip_bytes'] = zip_bytes
         captured['oss_key'] = oss_key
         return oss_key
@@ -360,7 +365,7 @@ def test_upload_activity_import_api_body_fields_via_post_capture(mock_requests, 
     monkeypatch.setattr(requests, 'post', spy_post)
 
     captured_oss = {}
-    def fake_upload(zip_bytes, oss_key):
+    def fake_upload(zip_bytes, oss_key, **kwargs):
         captured_oss['zip_bytes'] = zip_bytes
         captured_oss['oss_key'] = oss_key
         return oss_key

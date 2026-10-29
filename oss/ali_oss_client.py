@@ -2,10 +2,13 @@
 
 Mirrors /Users/mac/Code/pyCode/garmin-sync-coros/scripts/oss/ali_oss_client.py
 (REFERENCE ONLY). STS endpoint, app_id, and sign are COROS hardcoded values.
+
+Since 2026-10-03 COROS closed the anonymous STS channel
+(faq.coros.com/openapi/oss/sts → nginx 404); the credentials now come from
+the training-centre BFF proxy, authenticated with the login accessToken.
+See oss/sts.py for the channel list.
 """
 
-import base64
-import json
 import logging
 import os
 import tempfile
@@ -14,16 +17,21 @@ import oss2
 from oss2 import SizedFileAdapter, determine_part_size
 from oss2.models import PartInfo
 
+from oss import sts
+
 logger = logging.getLogger(__name__)
 
 # --- COROS hardcoded constants (do not change; verified against prod API) ---
-STS_BASE = "https://faq.coros.com/openapi/oss/sts"
-APP_ID = "1660188068672619112"
+STS_BASE = sts.LEGACY_STS_BASE  # anonymous channel — closed by COROS 2026-10-03
+APP_ID = sts.APP_ID
 SIGN = "9AD4AA35AAFEE6BB1E847A76848D58DF"  # sign for aliyun
 BUCKET = "coros-oss"
 SERVICE = "aliyun"
 OSS_ENDPOINT = "https://oss-cn-beijing.aliyuncs.com"
-SALT = "9y78gpoERW4lBNYL"  # used to decode the STS credentials blob
+SALT = sts.SALT  # used to decode the STS credentials blob
+
+# Training-centre host that proxies the STS request for the CN region.
+STS_HOSTS = ("https://trainingcn.coros.com",)
 
 
 def _decode_credentials(blob: str) -> dict:
@@ -36,32 +44,35 @@ def _decode_credentials(blob: str) -> dict:
     anyone with the STS response can decode it. Treat the resulting
     AccessKey as short-lived (STS default = 1h).
     """
-    return json.loads(base64.b64decode(blob.replace(SALT, '')).decode('utf-8'))
+    return sts.decode_credentials(blob)
 
 
-def fetch_sts() -> dict:
-    """GET STS endpoint with hardcoded query params.
+def fetch_sts(access_token: str = None) -> dict:
+    """Fetch temporary OSS credentials for the CN region.
+
+    access_token: the accessToken returned by COROS /account/login. Required
+        by the channels that are still alive — the anonymous one was closed
+        by COROS on 2026-10-03.
 
     Returns dict with: AccessKeyId, AccessKeySecret, SecurityToken.
     """
-    import requests
-    url = '%s?bucket=%s&service=%s&app_id=%s&sign=%s&v=2' % (
-        STS_BASE, BUCKET, SERVICE, APP_ID, SIGN)
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
-    payload = r.json()
-    if payload.get('code') != 200:
-        raise RuntimeError("COROS STS request failed: %s" % payload)
-    creds = _decode_credentials(payload['data']['credentials'])
-    return creds  # AccessKeyId / AccessKeySecret / SecurityToken
+    return sts.fetch_sts(
+        bucket=BUCKET,
+        service=SERVICE,
+        access_token=access_token,
+        sts_hosts=STS_HOSTS,
+        sign=SIGN,
+        app_id=APP_ID,
+    )
 
 
-def upload(fit_bytes: bytes, key: str) -> str:
+def upload(fit_bytes: bytes, key: str, access_token: str = None) -> str:
     """Multipart upload fit_bytes to Aliyun OSS. Returns the OSS object key.
 
     key: full OSS key (e.g. 'fit_zip/activity_xxx.fit'). Caller chooses.
+    access_token: COROS login token, used to fetch the STS credentials.
     """
-    creds = fetch_sts()
+    creds = fetch_sts(access_token)
     auth = oss2.StsAuth(creds['AccessKeyId'], creds['AccessKeySecret'], creds['SecurityToken'])
     bucket = oss2.Bucket(auth, OSS_ENDPOINT, BUCKET)
 

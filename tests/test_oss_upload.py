@@ -22,7 +22,7 @@ def test_ali_upload_invokes_multipart(monkeypatch, tmp_path):
     # Mock fetch_sts to avoid HTTP
     monkeypatch.setattr(
         ali_oss_client, 'fetch_sts',
-        lambda: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'},
+        lambda *a, **kw: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'},
     )
 
     # Mock the Bucket class to capture multipart call sequence
@@ -58,7 +58,7 @@ def test_ali_upload_cleans_up_temp_file(monkeypatch):
     from oss import ali_oss_client
     import oss2
 
-    monkeypatch.setattr(ali_oss_client, 'fetch_sts', lambda: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
+    monkeypatch.setattr(ali_oss_client, 'fetch_sts', lambda *a, **kw: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
     init_resp = MagicMock(); init_resp.upload_id = 'uid'
     part_result = MagicMock(); part_result.etag = 'e'
     bucket_mock = MagicMock()
@@ -87,7 +87,7 @@ def test_ali_upload_single_part_data(monkeypatch):
     from oss import ali_oss_client
     import oss2
 
-    monkeypatch.setattr(ali_oss_client, 'fetch_sts', lambda: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
+    monkeypatch.setattr(ali_oss_client, 'fetch_sts', lambda *a, **kw: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
     init_resp = MagicMock(); init_resp.upload_id = 'uid'
     part_result = MagicMock(); part_result.etag = 'e'
     bucket_mock = MagicMock()
@@ -104,7 +104,7 @@ def test_ali_upload_single_part_data(monkeypatch):
 
 def test_aws_upload_default_bucket_is_eu_coros(monkeypatch):
     from oss import aws_oss_client
-    monkeypatch.setattr(aws_oss_client, 'fetch_sts', lambda b: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
+    monkeypatch.setattr(aws_oss_client, 'fetch_sts', lambda b, *a, **kw: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
 
     captured = {}
     fake_client = MagicMock()
@@ -122,7 +122,7 @@ def test_aws_upload_default_bucket_is_eu_coros(monkeypatch):
 
 def test_aws_upload_coros_s3_uses_us_west_2(monkeypatch):
     from oss import aws_oss_client
-    monkeypatch.setattr(aws_oss_client, 'fetch_sts', lambda b: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
+    monkeypatch.setattr(aws_oss_client, 'fetch_sts', lambda b, *a, **kw: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
 
     captured = {}
     fake_client = MagicMock()
@@ -137,7 +137,7 @@ def test_aws_upload_coros_s3_uses_us_west_2(monkeypatch):
 
 def test_aws_upload_explicit_region_overrides_default(monkeypatch):
     from oss import aws_oss_client
-    monkeypatch.setattr(aws_oss_client, 'fetch_sts', lambda b: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
+    monkeypatch.setattr(aws_oss_client, 'fetch_sts', lambda b, *a, **kw: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
     captured = {}
     fake_client = MagicMock()
     def fake_boto_client(*args, **kwargs):
@@ -152,7 +152,7 @@ def test_aws_upload_uses_transfer_config(monkeypatch):
     """TransferConfig is what triggers multipart; verify it's set with the
     5 MB threshold that matches the ali client."""
     from oss import aws_oss_client
-    monkeypatch.setattr(aws_oss_client, 'fetch_sts', lambda b: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
+    monkeypatch.setattr(aws_oss_client, 'fetch_sts', lambda b, *a, **kw: {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'})
 
     captured_config = {}
     fake_client = MagicMock()
@@ -168,3 +168,46 @@ def test_aws_upload_uses_transfer_config(monkeypatch):
     aws_oss_client.upload(b'data', 'k')
     assert captured_config.get('multipart_threshold') == 5 * 1024 * 1024
     assert captured_config.get('multipart_chunksize') == 5 * 1024 * 1024
+
+
+# --- the login token has to reach the STS fetch -------------------------------
+#
+# Since 2026-10-03 COROS closed the anonymous STS channel: the temporary OSS
+# credentials are only obtainable with the accessToken from /account/login.
+# The upload call therefore has to hand the token down to fetch_sts().
+
+def test_ali_upload_passes_access_token_to_fetch_sts(monkeypatch):
+    from oss import ali_oss_client
+    import oss2
+
+    captured = {}
+    def fake_fetch_sts(access_token=None):
+        captured['access_token'] = access_token
+        return {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'}
+    monkeypatch.setattr(ali_oss_client, 'fetch_sts', fake_fetch_sts)
+
+    bucket_mock = MagicMock()
+    bucket_mock.init_multipart_upload.return_value = MagicMock(upload_id='uid')
+    bucket_mock.upload_part.return_value = MagicMock(etag='e')
+    with patch.object(oss2, 'Bucket', return_value=bucket_mock):
+        ali_oss_client.upload(b'fit', 'k', access_token='tok-abc')
+
+    assert captured['access_token'] == 'tok-abc'
+
+
+def test_aws_upload_passes_access_token_to_fetch_sts(monkeypatch):
+    from oss import aws_oss_client
+
+    captured = {}
+    def fake_fetch_sts(bucket, service='aws', access_token=None):
+        captured['bucket'] = bucket
+        captured['access_token'] = access_token
+        return {'AccessKeyId': 'a', 'AccessKeySecret': 'b', 'SecurityToken': 'c'}
+    monkeypatch.setattr(aws_oss_client, 'fetch_sts', fake_fetch_sts)
+
+    fake_client = MagicMock()
+    monkeypatch.setattr(aws_oss_client.boto3, 'client', lambda *a, **kw: fake_client)
+    aws_oss_client.upload(b'fit', 'k', bucket='eu-coros', access_token='tok-xyz')
+
+    assert captured['bucket'] == 'eu-coros'
+    assert captured['access_token'] == 'tok-xyz'

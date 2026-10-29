@@ -57,7 +57,7 @@ def test_hiddenimports_includes_oss_submodules():
     m = re.search(r'hiddenimports\s*=\s*\[(.*?)\]', text, flags=re.DOTALL)
     assert m
     entries = {e.strip().strip("'\"") for e in m.group(1).split(',') if e.strip()}
-    for needed in ('oss', 'oss.ali_oss_client', 'oss.aws_oss_client'):
+    for needed in ('oss', 'oss.ali_oss_client', 'oss.aws_oss_client', 'oss.sts'):
         assert needed in entries, f"standalone.spec hiddenimports missing {needed!r}"
 
 
