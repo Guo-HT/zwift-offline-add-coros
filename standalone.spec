@@ -15,6 +15,7 @@ a = Analysis(
         'oss',
         'oss.ali_oss_client',
         'oss.aws_oss_client',
+        'oss.sts',
         'oss2',
         'oss2.models',
         'boto3',
